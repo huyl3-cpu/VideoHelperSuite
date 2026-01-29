@@ -315,6 +315,7 @@ class VideoCombine:
             return ((save_output, []),)
         num_frames = len(images)
         pbar = ProgressBar(num_frames)
+        original_images_tensor = images if isinstance(images, torch.Tensor) else None  # Save for RAM cleanup
         if vae is not None:
             downscale_ratio = getattr(vae, "downscale_ratio", 8)
             width = images.size(-1)*downscale_ratio
@@ -645,11 +646,19 @@ class VideoCombine:
             print(f"[Video Combine A100] ⚠️ AGGRESSIVE RAM CLEANUP - RAM before: {ram_before:.2f} GB")
             
             # ============================================================
-            # NOTE: Direct tensor clearing via gc.get_objects() is NOT possible
-            # because we cannot distinguish video data from model weights.
-            # Both can be on CPU with requires_grad=False in eval mode.
-            # We rely on ComfyUI's memory management + garbage collection.
+            # Step 0: Clear the images tensor directly (safe - we know it's video data)
+            # This clears RAM used by frames from SeedVR2, GIMM-VFI, etc.
             # ============================================================
+            try:
+                # Clear original images tensor if it exists (saved before converting to iterator)
+                if original_images_tensor is not None:
+                    if hasattr(original_images_tensor, 'data') and hasattr(original_images_tensor, 'numel'):
+                        images_size = original_images_tensor.numel() * original_images_tensor.element_size()
+                        images_size_gb = images_size / 1024 / 1024 / 1024
+                        original_images_tensor.data = torch.empty(0, dtype=original_images_tensor.dtype, device=original_images_tensor.device)
+                        print(f"[Video Combine A100] ✅ Cleared images tensor ({images_size_gb:.2f} GB RAM)")
+            except Exception as e:
+                print(f"[Video Combine A100] ⚠️ Could not clear images tensor: {e}")
             
             # Step 1: Unload models and clear VRAM (without offloading to RAM)
             try:
