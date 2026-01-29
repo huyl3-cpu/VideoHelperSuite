@@ -651,17 +651,39 @@ class VideoCombine:
             # We rely on ComfyUI's memory management + garbage collection.
             # ============================================================
             
-            # Step 1: Unload all models from VRAM/RAM
+            # Step 1: Unload models and clear VRAM (without offloading to RAM)
             try:
                 import comfy.model_management as mm
+                
+                # Get VRAM before cleanup
+                vram_before = 0
+                if torch.cuda.is_available():
+                    vram_before = torch.cuda.memory_allocated() / 1024 / 1024 / 1024
+                    print(f"[Video Combine A100] VRAM before: {vram_before:.2f} GB")
+                
+                # Unload all models (ComfyUI will handle the cleanup)
                 mm.unload_all_models()
+                
+                # Request maximum memory free
                 device = mm.get_torch_device()
                 try:
                     mm.free_memory(999 * 1024 * 1024 * 1024, device)
                 except:
                     pass
+                
+                # Soft cache cleanup
                 mm.soft_empty_cache()
-                print("[Video Combine A100] ✅ Model memory cleared")
+                
+                # Get VRAM after cleanup
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                    torch.cuda.empty_cache()
+                    vram_after = torch.cuda.memory_allocated() / 1024 / 1024 / 1024
+                    vram_freed = vram_before - vram_after
+                    print(f"[Video Combine A100] ✅ VRAM freed: {vram_freed:.2f} GB (now: {vram_after:.2f} GB)")
+                else:
+                    print("[Video Combine A100] ✅ Models unloaded")
+                    
             except Exception as e:
                 print(f"[Video Combine A100] Model cleanup error: {e}")
             
