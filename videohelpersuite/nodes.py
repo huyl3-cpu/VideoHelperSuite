@@ -636,49 +636,51 @@ class VideoCombine:
         
         # Clear RAM if requested
         if clear_ram:
+            # CRITICAL: Set free_memory flag to trigger cache reset after workflow completes
+            # This tells ComfyUI's main loop to call e.reset() which clears all cached outputs
+            try:
+                import server
+                if hasattr(server, 'PromptServer') and server.PromptServer.instance is not None:
+                    server.PromptServer.instance.prompt_queue.set_flag("free_memory", True)
+                    print("[Video Combine] Set free_memory flag - RAM will be cleared after workflow completes")
+            except Exception as e:
+                print(f"[Video Combine] Could not set free_memory flag: {e}")
+            
+            # Immediate cleanup for VRAM and models
             try:
                 import comfy.model_management as mm
                 
-                # Step 1: Get device info
-                device = mm.get_torch_device()
-                
-                # Step 2: Unload all models from VRAM - aggressive cleanup
+                # Unload all models from VRAM
                 mm.unload_all_models()
                 
-                # Step 3: Force free memory - this is the key function
-                # Request to free as much memory as possible (999GB request triggers max cleanup)
+                # Force free VRAM
+                device = mm.get_torch_device()
                 try:
-                    mm.free_memory(999 * 1024 * 1024 * 1024, device)  # Request 999GB to force max cleanup
+                    mm.free_memory(999 * 1024 * 1024 * 1024, device)
                 except:
                     pass
                 
-                # Step 4: Soft empty cache 
                 mm.soft_empty_cache()
                 
             except Exception as e:
-                print(f"[Video Combine] ComfyUI cleanup error: {e}")
+                print(f"[Video Combine] VRAM cleanup error: {e}")
             
-            # Step 5: Force Python garbage collection - multiple passes
-            gc.collect()
+            # Force Python garbage collection
             gc.collect()
             gc.collect()
             
-            # Step 6: Clear CUDA cache
+            # Clear CUDA cache
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
                 torch.cuda.synchronize()
-                # Force CUDA to release fragmented memory
-                try:
-                    torch.cuda.reset_peak_memory_stats()
-                except:
-                    pass
             
-            # Print memory status for debugging
+            # Print memory status
             try:
                 import psutil
                 ram = psutil.virtual_memory()
-                vram_free = torch.cuda.memory_reserved() / (1024**3) if torch.cuda.is_available() else 0
-                print(f"[Video Combine] After cleanup - RAM: {ram.percent:.1f}% used ({ram.used / (1024**3):.1f}GB), VRAM reserved: {vram_free:.1f}GB")
+                vram_reserved = torch.cuda.memory_reserved() / (1024**3) if torch.cuda.is_available() else 0
+                print(f"[Video Combine] Current - RAM: {ram.percent:.1f}% ({ram.used / (1024**3):.1f}GB), VRAM reserved: {vram_reserved:.1f}GB")
+                print("[Video Combine] Full RAM cleanup will occur after workflow completes")
             except:
                 pass
         
