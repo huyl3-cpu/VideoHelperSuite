@@ -638,16 +638,174 @@ class VideoCombine:
         
         # Clear RAM if requested
         if clear_ram:
-            # Set free_memory flag to trigger cache reset after workflow completes
-            try:
-                import server
-                if hasattr(server, 'PromptServer') and server.PromptServer.instance is not None:
-                    server.PromptServer.instance.prompt_queue.set_flag("free_memory", True)
-                    print("[Video Combine A100] Set free_memory flag - RAM will be cleared after workflow completes")
-            except Exception as e:
-                print(f"[Video Combine A100] Could not set free_memory flag: {e}")
+            import psutil
+            process = psutil.Process()
+            ram_before = process.memory_info().rss / 1024 / 1024 / 1024
+            print(f"[Video Combine A100] ⚠️ AGGRESSIVE RAM CLEANUP - RAM before: {ram_before:.2f} GB")
             
-            # Immediate cleanup for VRAM and models
+            # ============================================================
+            # DANGEROUS HACK: Direct access to ComfyUI execution internals
+            # This clears the execution cache to free images tensor
+            # WARNING: May cause crashes if other nodes need the data!
+            # ============================================================
+            
+            # Step 0: HACK - Clear execution cache directly
+            try:
+                import execution
+                import server
+                
+                # Method 1: Access PromptExecutor instance via server
+                if hasattr(server, 'PromptServer') and server.PromptServer.instance is not None:
+                    ps = server.PromptServer.instance
+                    
+                    # Try to find the executor
+                    executor = None
+                    if hasattr(ps, 'prompt_queue'):
+                        pq = ps.prompt_queue
+                        # The executor might be stored in various places
+                        if hasattr(pq, 'currently_running') and pq.currently_running:
+                            if hasattr(pq, 'executor'):
+                                executor = pq.executor
+                    
+                    # Try direct attribute
+                    if executor is None and hasattr(ps, 'executor'):
+                        executor = ps.executor
+                
+                # Method 2: Check for global executor reference
+                if executor is None:
+                    for name in ['current_executor', 'CURRENT_EXECUTOR', 'executor', '_executor']:
+                        if hasattr(execution, name):
+                            executor = getattr(execution, name)
+                            if executor is not None:
+                                break
+                
+                # Method 3: Search through all modules
+                if executor is None:
+                    import sys
+                    for module in list(sys.modules.values()):
+                        if module is None:
+                            continue
+                        for attr in ['prompt_executor', 'current_executor', 'executor']:
+                            if hasattr(module, attr):
+                                potential = getattr(module, attr)
+                                if potential is not None and hasattr(potential, 'outputs'):
+                                    executor = potential
+                                    break
+                        if executor is not None:
+                            break
+                
+                # If we found the executor, clear ONLY tensor data (keep filenames!)
+                if executor is not None:
+                    cleared_count = 0
+                    kept_count = 0
+                    
+                    # Get current node ID to avoid clearing our own output
+                    current_node_id = unique_id
+                    
+                    # Helper function to check if output contains tensors
+                    def contains_large_tensor(output):
+                        """Check if output contains large torch.Tensor (images)"""
+                        if isinstance(output, torch.Tensor):
+                            return output.numel() > 100000  # >100K elements = likely images
+                        elif isinstance(output, (list, tuple)):
+                            for item in output:
+                                if isinstance(item, torch.Tensor) and item.numel() > 100000:
+                                    return True
+                                # Recursively check nested structures
+                                if isinstance(item, (list, tuple)):
+                                    if contains_large_tensor(item):
+                                        return True
+                        return False
+                    
+                    # Helper function to clear tensors but keep other data
+                    def clear_tensors_in_output(output):
+                        """Clear tensor data but return other types intact"""
+                        if isinstance(output, torch.Tensor):
+                            if output.numel() > 100000:
+                                # Replace with empty tensor
+                                return torch.empty(0, device=output.device, dtype=output.dtype)
+                            return output
+                        elif isinstance(output, (list, tuple)):
+                            result = []
+                            for item in output:
+                                if isinstance(item, torch.Tensor) and item.numel() > 100000:
+                                    # Clear large tensors
+                                    result.append(torch.empty(0, device=item.device, dtype=item.dtype))
+                                elif isinstance(item, (list, tuple)):
+                                    # Recursively process
+                                    result.append(clear_tensors_in_output(item))
+                                else:
+                                    # Keep strings, ints, etc.
+                                    result.append(item)
+                            return type(output)(result) if isinstance(output, tuple) else result
+                        else:
+                            # Keep strings, ints, dicts, etc.
+                            return output
+                    
+                    # Clear outputs dictionary - ONLY tensors
+                    if hasattr(executor, 'outputs') and executor.outputs:
+                        for key in list(executor.outputs.keys()):
+                            # Skip current node - we need our filenames output!
+                            if key == current_node_id:
+                                kept_count += 1
+                                continue
+                                
+                            output = executor.outputs[key]
+                            if contains_large_tensor(output):
+                                # Clear tensors but keep structure
+                                executor.outputs[key] = clear_tensors_in_output(output)
+                                cleared_count += 1
+                            else:
+                                # Keep non-tensor outputs (filenames, strings, etc.)
+                                kept_count += 1
+                        
+                        print(f"[Video Combine A100] ✅ Cleared {cleared_count} tensor outputs, kept {kept_count} non-tensor outputs")
+                    
+                    # Clear caches - ONLY tensor data
+                    if hasattr(executor, 'caches') and executor.caches:
+                        cache_cleared = 0
+                        for cache_name, cache in list(executor.caches.items()):
+                            if hasattr(cache, 'cache') and cache.cache:
+                                for node_id in list(cache.cache.keys()):
+                                    # Skip current node
+                                    if node_id == current_node_id:
+                                        continue
+                                    
+                                    entry = cache.cache[node_id]
+                                    if isinstance(entry, dict) and 'output' in entry:
+                                        output = entry['output']
+                                        if contains_large_tensor(output):
+                                            entry['output'] = clear_tensors_in_output(output)
+                                            cache_cleared += 1
+                        
+                        if cache_cleared > 0:
+                            print(f"[Video Combine A100] ✅ Cleared {cache_cleared} cached tensor entries")
+                    
+                    # DON'T clear old_prompt - it may be needed for loop
+                    # DON'T clear outputs_ui - it's for display only
+                    
+                    print(f"[Video Combine A100] ✅ Selective tensor cleanup successful! (filenames preserved)")
+                else:
+                    print("[Video Combine A100] ⚠️ Could not find executor instance - trying alternative methods")
+                    
+                    # Alternative: Clear ONLY large video tensors via gc scan
+                    import gc
+                    tensor_cleared = 0
+                    for obj in gc.get_objects():
+                        try:
+                            if isinstance(obj, torch.Tensor) and obj.numel() > 1000000:  # >1M elements
+                                # Check if it's likely video data (4D tensor with many frames)
+                                if len(obj.shape) == 4 and obj.shape[0] > 10:
+                                    obj.data = torch.empty(0, device=obj.device, dtype=obj.dtype)
+                                    tensor_cleared += 1
+                        except:
+                            pass
+                    print(f"[Video Combine A100] ✅ Cleared {tensor_cleared} large video tensors via gc scan")
+                            
+            except Exception as e:
+                print(f"[Video Combine A100] ⚠️ Execution cache hack error: {e}")
+            
+            # Step 1: Unload all models from VRAM/RAM
             try:
                 import comfy.model_management as mm
                 mm.unload_all_models()
@@ -657,17 +815,62 @@ class VideoCombine:
                 except:
                     pass
                 mm.soft_empty_cache()
+                print("[Video Combine A100] ✅ Model memory cleared")
             except Exception as e:
-                print(f"[Video Combine A100] VRAM cleanup error: {e}")
+                print(f"[Video Combine A100] Model cleanup error: {e}")
             
-            # Force Python garbage collection
-            gc.collect()
-            gc.collect()
+            # Step 2: Clear server caches
+            try:
+                import server
+                if hasattr(server, 'PromptServer') and server.PromptServer.instance is not None:
+                    ps = server.PromptServer.instance
+                    ps.prompt_queue.set_flag("free_memory", True)
+                    for attr in ['last_node_id', 'last_prompt_id', 'last_execution_result']:
+                        if hasattr(ps, attr):
+                            setattr(ps, attr, None)
+            except:
+                pass
             
-            # Clear CUDA cache
+            # Step 3: Aggressive garbage collection
+            gc.collect(0)
+            gc.collect(1)
+            gc.collect(2)
+            for _ in range(5):
+                gc.collect()
+            
+            # Step 4: Clear CUDA memory completely
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
                 torch.cuda.synchronize()
+                try:
+                    torch.cuda.ipc_collect()
+                except:
+                    pass
+                try:
+                    torch.cuda.reset_peak_memory_stats()
+                    torch.cuda.reset_accumulated_memory_stats()
+                except:
+                    pass
+                torch.cuda.synchronize()
+                torch.cuda.empty_cache()
+            
+            # Step 5: Force memory release to OS (Linux/Colab)
+            try:
+                import ctypes
+                libc = ctypes.CDLL("libc.so.6")
+                libc.malloc_trim(0)
+                print("[Video Combine A100] ✅ malloc_trim - memory returned to OS")
+            except:
+                pass
+                
+            # Step 6: Final garbage collection
+            for _ in range(3):
+                gc.collect()
+            
+            # Report results
+            ram_after = process.memory_info().rss / 1024 / 1024 / 1024
+            ram_freed = ram_before - ram_after
+            print(f"[Video Combine A100] 🎉 RAM cleanup completed. RAM after: {ram_after:.2f} GB (freed: {ram_freed:.2f} GB)")
         
         # Return with or without preview based on enable_preview setting
         if enable_preview:
