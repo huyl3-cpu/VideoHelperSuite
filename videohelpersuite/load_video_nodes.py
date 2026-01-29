@@ -438,6 +438,7 @@ class LoadVideoUpload:
                     "frame_load_cap": ("INT", {"default": 0, "min": 0, "max": BIGMAX, "step": 1, "disable": 0}),
                     "skip_first_frames": ("INT", {"default": 0, "min": 0, "max": BIGMAX, "step": 1}),
                     "select_every_nth": ("INT", {"default": 1, "min": 1, "max": BIGMAX, "step": 1}),
+                    "enable_preview": ("BOOLEAN", {"default": True}),
                     },
                 "optional": {
                     "meta_batch": ("VHS_BatchManager",),
@@ -485,6 +486,7 @@ class LoadVideoPath:
                 "frame_load_cap": ("INT", {"default": 0, "min": 0, "max": BIGMAX, "step": 1, "disable": 0}),
                 "skip_first_frames": ("INT", {"default": 0, "min": 0, "max": BIGMAX, "step": 1}),
                 "select_every_nth": ("INT", {"default": 1, "min": 1, "max": BIGMAX, "step": 1}),
+                "enable_preview": ("BOOLEAN", {"default": True}),
             },
             "optional": {
                 "meta_batch": ("VHS_BatchManager",),

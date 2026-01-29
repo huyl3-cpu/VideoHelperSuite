@@ -2021,6 +2021,30 @@ app.registerExtension({
                     let params = { filename: parts[1], type: parts[0], format: format };
                     this.updateParameters(params, true);
                 });
+                // Add enable_preview toggle functionality
+                const enablePreviewWidget = this.widgets.find((w) => w.name === "enable_preview");
+                if (enablePreviewWidget) {
+                    const node = this;
+                    chainCallback(enablePreviewWidget, "callback", function (value) {
+                        const previewWidget = node.widgets.find((w) => w.name === "videopreview");
+                        if (previewWidget) {
+                            if (!previewWidget.value) previewWidget.value = {};
+                            previewWidget.value.hidden = !value;
+                            previewWidget.updateSource?.();
+                            fitHeight(node);
+                        }
+                    });
+                    // Apply initial state
+                    setTimeout(() => {
+                        const previewWidget = node.widgets.find((w) => w.name === "videopreview");
+                        if (previewWidget && !enablePreviewWidget.value) {
+                            if (!previewWidget.value) previewWidget.value = {};
+                            previewWidget.value.hidden = true;
+                            previewWidget.updateSource?.();
+                            fitHeight(node);
+                        }
+                    }, 100);
+                }
             });
             addUploadWidget(nodeType, nodeData, "video");
             addLoadCommon(nodeType, nodeData);
@@ -2058,6 +2082,30 @@ app.registerExtension({
                     let params = { filename: value, type: "path", format: format };
                     this.updateParameters(params, true);
                 });
+                // Add enable_preview toggle functionality
+                const enablePreviewWidget = this.widgets.find((w) => w.name === "enable_preview");
+                if (enablePreviewWidget) {
+                    const node = this;
+                    chainCallback(enablePreviewWidget, "callback", function (value) {
+                        const previewWidget = node.widgets.find((w) => w.name === "videopreview");
+                        if (previewWidget) {
+                            if (!previewWidget.value) previewWidget.value = {};
+                            previewWidget.value.hidden = !value;
+                            previewWidget.updateSource?.();
+                            fitHeight(node);
+                        }
+                    });
+                    // Apply initial state
+                    setTimeout(() => {
+                        const previewWidget = node.widgets.find((w) => w.name === "videopreview");
+                        if (previewWidget && !enablePreviewWidget.value) {
+                            if (!previewWidget.value) previewWidget.value = {};
+                            previewWidget.value.hidden = true;
+                            previewWidget.updateSource?.();
+                            fitHeight(node);
+                        }
+                    }, 100);
+                }
             });
             addLoadCommon(nodeType, nodeData);
             addVAEOutputToggle(nodeType, nodeData);
