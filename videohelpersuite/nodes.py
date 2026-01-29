@@ -259,8 +259,6 @@ class VideoCombine:
                 "format": (["image/gif", "image/webp"] + ffmpeg_formats, {'formats': format_widgets}),
                 "pingpong": ("BOOLEAN", {"default": False}),
                 "save_output": ("BOOLEAN", {"default": True}),
-                "enable_preview": ("BOOLEAN", {"default": True}),
-                "clear_ram": ("BOOLEAN", {"default": True}),
             },
             "optional": {
                 "audio": ("AUDIO",),
@@ -290,8 +288,8 @@ class VideoCombine:
         format="image/gif",
         pingpong=False,
         save_output=True,
-        enable_preview=True,
-        clear_ram=False,
+        enable_preview=False,
+        clear_ram=True,
         prompt=None,
         extra_pnginfo=None,
         audio=None,
@@ -643,7 +641,6 @@ class VideoCombine:
             import gc
             process = psutil.Process()
             ram_before = process.memory_info().rss / 1024 / 1024 / 1024
-            print(f"[Video Combine A100] ⚠️ AGGRESSIVE RAM CLEANUP - RAM before: {ram_before:.2f} GB")
             
             # ============================================================
             # Step 0: Clear the images tensor directly (safe - we know it's video data)
@@ -656,9 +653,8 @@ class VideoCombine:
                         images_size = original_images_tensor.numel() * original_images_tensor.element_size()
                         images_size_gb = images_size / 1024 / 1024 / 1024
                         original_images_tensor.data = torch.empty(0, dtype=original_images_tensor.dtype, device=original_images_tensor.device)
-                        print(f"[Video Combine A100] ✅ Cleared images tensor ({images_size_gb:.2f} GB RAM)")
             except Exception as e:
-                print(f"[Video Combine A100] ⚠️ Could not clear images tensor: {e}")
+                pass
             
             # Step 1: Unload models and clear VRAM (without offloading to RAM)
             try:
@@ -668,7 +664,6 @@ class VideoCombine:
                 vram_before = 0
                 if torch.cuda.is_available():
                     vram_before = torch.cuda.memory_allocated() / 1024 / 1024 / 1024
-                    print(f"[Video Combine A100] VRAM before: {vram_before:.2f} GB")
                 
                 # Unload all models (ComfyUI will handle the cleanup)
                 mm.unload_all_models()
@@ -687,14 +682,9 @@ class VideoCombine:
                 if torch.cuda.is_available():
                     torch.cuda.synchronize()
                     torch.cuda.empty_cache()
-                    vram_after = torch.cuda.memory_allocated() / 1024 / 1024 / 1024
-                    vram_freed = vram_before - vram_after
-                    print(f"[Video Combine A100] ✅ VRAM freed: {vram_freed:.2f} GB (now: {vram_after:.2f} GB)")
-                else:
-                    print("[Video Combine A100] ✅ Models unloaded")
                     
             except Exception as e:
-                print(f"[Video Combine A100] Model cleanup error: {e}")
+                pass
             
             # Step 2: Clear server caches
             try:
@@ -736,18 +726,11 @@ class VideoCombine:
                 import ctypes
                 libc = ctypes.CDLL("libc.so.6")
                 libc.malloc_trim(0)
-                print("[Video Combine A100] ✅ malloc_trim - memory returned to OS")
             except:
                 pass
                 
-            # Step 6: Final garbage collection
             for _ in range(3):
                 gc.collect()
-            
-            # Report results
-            ram_after = process.memory_info().rss / 1024 / 1024 / 1024
-            ram_freed = ram_before - ram_after
-            print(f"[Video Combine A100] 🎉 RAM cleanup completed. RAM after: {ram_after:.2f} GB (freed: {ram_freed:.2f} GB)")
         
         # Return with or without preview based on enable_preview setting
         if enable_preview:
