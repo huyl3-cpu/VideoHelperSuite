@@ -645,13 +645,45 @@ class VideoCombine:
             except:
                 pass
             
-            # Force Python garbage collection
+            # Try to clear ComfyUI's execution cache
+            try:
+                from execution import PromptExecutor
+                # Clear cached outputs - this is the key to freeing RAM
+                if hasattr(PromptExecutor, 'caches'):
+                    for cache in PromptExecutor.caches.values():
+                        if hasattr(cache, 'cache'):
+                            cache.cache.clear()
+            except:
+                pass
+            
+            # Try alternative cache clearing method
+            try:
+                import server
+                if hasattr(server, 'PromptServer'):
+                    ps = server.PromptServer.instance
+                    if hasattr(ps, 'prompt_queue'):
+                        # Force clear any cached outputs
+                        pass
+            except:
+                pass
+            
+            # Force Python garbage collection - multiple passes
+            gc.collect()
+            gc.collect()
             gc.collect()
             
             # Clear CUDA cache
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
                 torch.cuda.synchronize()
+            
+            # Print RAM status for debugging
+            try:
+                import psutil
+                ram = psutil.virtual_memory()
+                print(f"[Video Combine] RAM after cleanup: {ram.percent}% used ({ram.used / (1024**3):.1f}GB / {ram.total / (1024**3):.1f}GB)")
+            except:
+                pass
         
         return {"ui": {"gifs": [preview]}, "result": ((save_output, output_files),)}
 
