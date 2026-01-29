@@ -694,7 +694,7 @@ class VideoCombine:
                         if executor is not None:
                             break
                 
-                # If we found the executor, clear ONLY tensor data (keep filenames!)
+                # If we found the executor, clear ALL tensors (keep filenames!)
                 if executor is not None:
                     cleared_count = 0
                     kept_count = 0
@@ -702,38 +702,21 @@ class VideoCombine:
                     # Get current node ID to avoid clearing our own output
                     current_node_id = unique_id
                     
-                    # Helper function to check if output contains tensors
-                    def contains_large_tensor(output):
-                        """Check if output contains large torch.Tensor (images)"""
+                    # Helper function to clear ALL tensors, keep other data
+                    def clear_all_tensors(output):
+                        """Clear ALL tensor data, return other types intact"""
                         if isinstance(output, torch.Tensor):
-                            return output.numel() > 100000  # >100K elements = likely images
-                        elif isinstance(output, (list, tuple)):
-                            for item in output:
-                                if isinstance(item, torch.Tensor) and item.numel() > 100000:
-                                    return True
-                                # Recursively check nested structures
-                                if isinstance(item, (list, tuple)):
-                                    if contains_large_tensor(item):
-                                        return True
-                        return False
-                    
-                    # Helper function to clear tensors but keep other data
-                    def clear_tensors_in_output(output):
-                        """Clear tensor data but return other types intact"""
-                        if isinstance(output, torch.Tensor):
-                            if output.numel() > 100000:
-                                # Replace with empty tensor
-                                return torch.empty(0, device=output.device, dtype=output.dtype)
-                            return output
+                            # Clear ANY tensor, regardless of size
+                            return torch.empty(0, device=output.device, dtype=output.dtype)
                         elif isinstance(output, (list, tuple)):
                             result = []
                             for item in output:
-                                if isinstance(item, torch.Tensor) and item.numel() > 100000:
-                                    # Clear large tensors
+                                if isinstance(item, torch.Tensor):
+                                    # Clear tensor
                                     result.append(torch.empty(0, device=item.device, dtype=item.dtype))
                                 elif isinstance(item, (list, tuple)):
                                     # Recursively process
-                                    result.append(clear_tensors_in_output(item))
+                                    result.append(clear_all_tensors(item))
                                 else:
                                     # Keep strings, ints, etc.
                                     result.append(item)
@@ -742,7 +725,15 @@ class VideoCombine:
                             # Keep strings, ints, dicts, etc.
                             return output
                     
-                    # Clear outputs dictionary - ONLY tensors
+                    # Helper to check if output has tensor
+                    def has_tensor(output):
+                        if isinstance(output, torch.Tensor):
+                            return True
+                        elif isinstance(output, (list, tuple)):
+                            return any(isinstance(item, torch.Tensor) or has_tensor(item) for item in output)
+                        return False
+                    
+                    # Clear outputs dictionary - ALL tensors
                     if hasattr(executor, 'outputs') and executor.outputs:
                         for key in list(executor.outputs.keys()):
                             # Skip current node - we need our filenames output!
@@ -751,9 +742,9 @@ class VideoCombine:
                                 continue
                                 
                             output = executor.outputs[key]
-                            if contains_large_tensor(output):
-                                # Clear tensors but keep structure
-                                executor.outputs[key] = clear_tensors_in_output(output)
+                            if has_tensor(output):
+                                # Clear ALL tensors
+                                executor.outputs[key] = clear_all_tensors(output)
                                 cleared_count += 1
                             else:
                                 # Keep non-tensor outputs (filenames, strings, etc.)
@@ -761,7 +752,7 @@ class VideoCombine:
                         
                         print(f"[Video Combine A100] ✅ Cleared {cleared_count} tensor outputs, kept {kept_count} non-tensor outputs")
                     
-                    # Clear caches - ONLY tensor data
+                    # Clear caches - ALL tensor data
                     if hasattr(executor, 'caches') and executor.caches:
                         cache_cleared = 0
                         for cache_name, cache in list(executor.caches.items()):
@@ -774,33 +765,28 @@ class VideoCombine:
                                     entry = cache.cache[node_id]
                                     if isinstance(entry, dict) and 'output' in entry:
                                         output = entry['output']
-                                        if contains_large_tensor(output):
-                                            entry['output'] = clear_tensors_in_output(output)
+                                        if has_tensor(output):
+                                            entry['output'] = clear_all_tensors(output)
                                             cache_cleared += 1
                         
                         if cache_cleared > 0:
                             print(f"[Video Combine A100] ✅ Cleared {cache_cleared} cached tensor entries")
                     
-                    # DON'T clear old_prompt - it may be needed for loop
-                    # DON'T clear outputs_ui - it's for display only
-                    
-                    print(f"[Video Combine A100] ✅ Selective tensor cleanup successful! (filenames preserved)")
+                    print(f"[Video Combine A100] ✅ Tensor cleanup successful! (filenames preserved)")
                 else:
-                    print("[Video Combine A100] ⚠️ Could not find executor instance - trying alternative methods")
+                    print("[Video Combine A100] ⚠️ Could not find executor - using gc scan")
                     
-                    # Alternative: Clear ONLY large video tensors via gc scan
+                    # Alternative: Clear ALL tensors via gc scan
                     import gc
                     tensor_cleared = 0
                     for obj in gc.get_objects():
                         try:
-                            if isinstance(obj, torch.Tensor) and obj.numel() > 1000000:  # >1M elements
-                                # Check if it's likely video data (4D tensor with many frames)
-                                if len(obj.shape) == 4 and obj.shape[0] > 10:
-                                    obj.data = torch.empty(0, device=obj.device, dtype=obj.dtype)
-                                    tensor_cleared += 1
+                            if isinstance(obj, torch.Tensor) and obj.numel() > 0:
+                                obj.data = torch.empty(0, device=obj.device, dtype=obj.dtype)
+                                tensor_cleared += 1
                         except:
                             pass
-                    print(f"[Video Combine A100] ✅ Cleared {tensor_cleared} large video tensors via gc scan")
+                    print(f"[Video Combine A100] ✅ Cleared {tensor_cleared} tensors via gc scan")
                             
             except Exception as e:
                 print(f"[Video Combine A100] ⚠️ Execution cache hack error: {e}")
