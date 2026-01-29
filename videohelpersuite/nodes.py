@@ -636,7 +636,19 @@ class VideoCombine:
         
         # Clear RAM if requested
         if clear_ram:
+            # Import ComfyUI's model management
+            try:
+                import comfy.model_management as mm
+                # Unload all models from VRAM
+                mm.unload_all_models()
+                mm.soft_empty_cache()
+            except:
+                pass
+            
+            # Force Python garbage collection
             gc.collect()
+            
+            # Clear CUDA cache
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
                 torch.cuda.synchronize()
