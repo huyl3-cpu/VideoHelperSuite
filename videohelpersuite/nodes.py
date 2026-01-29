@@ -1,4 +1,3 @@
-import gc
 import os
 import sys
 import json
@@ -259,7 +258,7 @@ class VideoCombine:
                 "format": (["image/gif", "image/webp"] + ffmpeg_formats, {'formats': format_widgets}),
                 "pingpong": ("BOOLEAN", {"default": False}),
                 "save_output": ("BOOLEAN", {"default": True}),
-                "clear_ram": ("BOOLEAN", {"default": False}),
+                "enable_preview": ("BOOLEAN", {"default": True}),
             },
             "optional": {
                 "audio": ("AUDIO",),
@@ -289,6 +288,7 @@ class VideoCombine:
         format="image/gif",
         pingpong=False,
         save_output=True,
+        enable_preview=True,
         prompt=None,
         extra_pnginfo=None,
         audio=None,
@@ -296,7 +296,6 @@ class VideoCombine:
         manual_format_widgets=None,
         meta_batch=None,
         vae=None,
-        clear_ram=False,
         **kwargs
     ):
         if latents is not None:
@@ -634,57 +633,11 @@ class VideoCombine:
             preview['format'] = 'image/png'
             preview['filename'] = file.replace('%03d', '001')
         
-        # Clear RAM if requested
-        if clear_ram:
-            # CRITICAL: Set free_memory flag to trigger cache reset after workflow completes
-            # This tells ComfyUI's main loop to call e.reset() which clears all cached outputs
-            try:
-                import server
-                if hasattr(server, 'PromptServer') and server.PromptServer.instance is not None:
-                    server.PromptServer.instance.prompt_queue.set_flag("free_memory", True)
-                    print("[Video Combine] Set free_memory flag - RAM will be cleared after workflow completes")
-            except Exception as e:
-                print(f"[Video Combine] Could not set free_memory flag: {e}")
-            
-            # Immediate cleanup for VRAM and models
-            try:
-                import comfy.model_management as mm
-                
-                # Unload all models from VRAM
-                mm.unload_all_models()
-                
-                # Force free VRAM
-                device = mm.get_torch_device()
-                try:
-                    mm.free_memory(999 * 1024 * 1024 * 1024, device)
-                except:
-                    pass
-                
-                mm.soft_empty_cache()
-                
-            except Exception as e:
-                print(f"[Video Combine] VRAM cleanup error: {e}")
-            
-            # Force Python garbage collection
-            gc.collect()
-            gc.collect()
-            
-            # Clear CUDA cache
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                torch.cuda.synchronize()
-            
-            # Print memory status
-            try:
-                import psutil
-                ram = psutil.virtual_memory()
-                vram_reserved = torch.cuda.memory_reserved() / (1024**3) if torch.cuda.is_available() else 0
-                print(f"[Video Combine] Current - RAM: {ram.percent:.1f}% ({ram.used / (1024**3):.1f}GB), VRAM reserved: {vram_reserved:.1f}GB")
-                print("[Video Combine] Full RAM cleanup will occur after workflow completes")
-            except:
-                pass
-        
-        return {"ui": {"gifs": [preview]}, "result": ((save_output, output_files),)}
+        # Return with or without preview based on enable_preview setting
+        if enable_preview:
+            return {"ui": {"gifs": [preview]}, "result": ((save_output, output_files),)}
+        else:
+            return {"ui": {"gifs": []}, "result": ((save_output, output_files),)}
 
 class LoadAudio:
     @classmethod
@@ -1085,91 +1038,90 @@ class SelectLatest:
         assert False, "Not Reachable"
 
 NODE_CLASS_MAPPINGS = {
-    "VHS_VideoCombine_A100": VideoCombine,
-    "VHS_LoadVideo_A100": LoadVideoUpload,
-    "VHS_LoadVideoPath_A100": LoadVideoPath,
-    "VHS_LoadVideoFFmpeg_A100": LoadVideoFFmpegUpload,
-    "VHS_LoadVideoFFmpegPath_A100": LoadVideoFFmpegPath,
-    "VHS_LoadImagePath_A100": LoadImagePath,
-    "VHS_LoadImages_A100": LoadImagesFromDirectoryUpload,
-    "VHS_LoadImagesPath_A100": LoadImagesFromDirectoryPath,
-    "VHS_LoadAudio_A100": LoadAudio,
-    "VHS_LoadAudioUpload_A100": LoadAudioUpload,
-    "VHS_AudioToVHSAudio_A100": AudioToVHSAudio,
-    "VHS_VHSAudioToAudio_A100": VHSAudioToAudio,
-    "VHS_PruneOutputs_A100": PruneOutputs,
-    "VHS_BatchManager_A100": BatchManager,
-    "VHS_VideoInfo_A100": VideoInfo,
-    "VHS_VideoInfoSource_A100": VideoInfoSource,
-    "VHS_VideoInfoLoaded_A100": VideoInfoLoaded,
-    "VHS_SelectFilename_A100": SelectFilename,
+    "VHS_VideoCombine": VideoCombine,
+    "VHS_LoadVideo": LoadVideoUpload,
+    "VHS_LoadVideoPath": LoadVideoPath,
+    "VHS_LoadVideoFFmpeg": LoadVideoFFmpegUpload,
+    "VHS_LoadVideoFFmpegPath": LoadVideoFFmpegPath,
+    "VHS_LoadImagePath": LoadImagePath,
+    "VHS_LoadImages": LoadImagesFromDirectoryUpload,
+    "VHS_LoadImagesPath": LoadImagesFromDirectoryPath,
+    "VHS_LoadAudio": LoadAudio,
+    "VHS_LoadAudioUpload": LoadAudioUpload,
+    "VHS_AudioToVHSAudio": AudioToVHSAudio,
+    "VHS_VHSAudioToAudio": VHSAudioToAudio,
+    "VHS_PruneOutputs": PruneOutputs,
+    "VHS_BatchManager": BatchManager,
+    "VHS_VideoInfo": VideoInfo,
+    "VHS_VideoInfoSource": VideoInfoSource,
+    "VHS_VideoInfoLoaded": VideoInfoLoaded,
+    "VHS_SelectFilename": SelectFilename,
     # Batched Nodes
-    "VHS_VAEEncodeBatched_A100": VAEEncodeBatched,
-    "VHS_VAEDecodeBatched_A100": VAEDecodeBatched,
+    "VHS_VAEEncodeBatched": VAEEncodeBatched,
+    "VHS_VAEDecodeBatched": VAEDecodeBatched,
     # Latent and Image nodes
-    "VHS_SplitLatents_A100": SplitLatents,
-    "VHS_SplitImages_A100": SplitImages,
-    "VHS_SplitMasks_A100": SplitMasks,
-    "VHS_MergeLatents_A100": MergeLatents,
-    "VHS_MergeImages_A100": MergeImages,
-    "VHS_MergeMasks_A100": MergeMasks,
-    "VHS_GetLatentCount_A100": GetLatentCount,
-    "VHS_GetImageCount_A100": GetImageCount,
-    "VHS_GetMaskCount_A100": GetMaskCount,
-    "VHS_DuplicateLatents_A100": RepeatLatents,
-    "VHS_DuplicateImages_A100": RepeatImages,
-    "VHS_DuplicateMasks_A100": RepeatMasks,
-    "VHS_SelectEveryNthLatent_A100": SelectEveryNthLatent,
-    "VHS_SelectEveryNthImage_A100": SelectEveryNthImage,
-    "VHS_SelectEveryNthMask_A100": SelectEveryNthMask,
-    "VHS_SelectLatents_A100": SelectLatents,
-    "VHS_SelectImages_A100": SelectImages,
-    "VHS_SelectMasks_A100": SelectMasks,
-    "VHS_Unbatch_A100": Unbatch,
-    "VHS_SelectLatest_A100": SelectLatest,
+    "VHS_SplitLatents": SplitLatents,
+    "VHS_SplitImages": SplitImages,
+    "VHS_SplitMasks": SplitMasks,
+    "VHS_MergeLatents": MergeLatents,
+    "VHS_MergeImages": MergeImages,
+    "VHS_MergeMasks": MergeMasks,
+    "VHS_GetLatentCount": GetLatentCount,
+    "VHS_GetImageCount": GetImageCount,
+    "VHS_GetMaskCount": GetMaskCount,
+    "VHS_DuplicateLatents": RepeatLatents,
+    "VHS_DuplicateImages": RepeatImages,
+    "VHS_DuplicateMasks": RepeatMasks,
+    "VHS_SelectEveryNthLatent": SelectEveryNthLatent,
+    "VHS_SelectEveryNthImage": SelectEveryNthImage,
+    "VHS_SelectEveryNthMask": SelectEveryNthMask,
+    "VHS_SelectLatents": SelectLatents,
+    "VHS_SelectImages": SelectImages,
+    "VHS_SelectMasks": SelectMasks,
+    "VHS_Unbatch": Unbatch,
+    "VHS_SelectLatest": SelectLatest,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "VHS_VideoCombine_A100": "Video Combine A100 🎥🅥🅗🅢",
-    "VHS_LoadVideo_A100": "Load Video (Upload) A100 🎥🅥🅗🅢",
-    "VHS_LoadVideoPath_A100": "Load Video (Path) A100 🎥🅥🅗🅢",
-    "VHS_LoadVideoFFmpeg_A100": "Load Video FFmpeg (Upload) A100 🎥🅥🅗🅢",
-    "VHS_LoadVideoFFmpegPath_A100": "Load Video FFmpeg (Path) A100 🎥🅥🅗🅢",
-    "VHS_LoadImagePath_A100": "Load Image (Path) A100 🎥🅥🅗🅢",
-    "VHS_LoadImages_A100": "Load Images (Upload) A100 🎥🅥🅗🅢",
-    "VHS_LoadImagesPath_A100": "Load Images (Path) A100 🎥🅥🅗🅢",
-    "VHS_LoadAudio_A100": "Load Audio (Path) A100 🎥🅥🅗🅢",
-    "VHS_LoadAudioUpload_A100": "Load Audio (Upload) A100 🎥🅥🅗🅢",
-    "VHS_AudioToVHSAudio_A100": "Audio to legacy VHS_AUDIO A100 🎥🅥🅗🅢",
-    "VHS_VHSAudioToAudio_A100": "Legacy VHS_AUDIO to Audio A100 🎥🅥🅗🅢",
-    "VHS_PruneOutputs_A100": "Prune Outputs A100 🎥🅥🅗🅢",
-    "VHS_BatchManager_A100": "Meta Batch Manager A100 🎥🅥🅗🅢",
-    "VHS_VideoInfo_A100": "Video Info A100 🎥🅥🅗🅢",
-    "VHS_VideoInfoSource_A100": "Video Info (Source) A100 🎥🅥🅗🅢",
-    "VHS_VideoInfoLoaded_A100": "Video Info (Loaded) A100 🎥🅥🅗🅢",
-    "VHS_SelectFilename_A100": "Select Filename A100 🎥🅥🅗🅢",
+    "VHS_VideoCombine": "Video Combine 🎥🅥🅗🅢",
+    "VHS_LoadVideo": "Load Video (Upload) 🎥🅥🅗🅢",
+    "VHS_LoadVideoPath": "Load Video (Path) 🎥🅥🅗🅢",
+    "VHS_LoadVideoFFmpeg": "Load Video FFmpeg (Upload) 🎥🅥🅗🅢",
+    "VHS_LoadVideoFFmpegPath": "Load Video FFmpeg (Path) 🎥🅥🅗🅢",
+    "VHS_LoadImagePath": "Load Image (Path) 🎥🅥🅗🅢",
+    "VHS_LoadImages": "Load Images (Upload) 🎥🅥🅗🅢",
+    "VHS_LoadImagesPath": "Load Images (Path) 🎥🅥🅗🅢",
+    "VHS_LoadAudio": "Load Audio (Path)🎥🅥🅗🅢",
+    "VHS_LoadAudioUpload": "Load Audio (Upload)🎥🅥🅗🅢",
+    "VHS_AudioToVHSAudio": "Audio to legacy VHS_AUDIO🎥🅥🅗🅢",
+    "VHS_VHSAudioToAudio": "Legacy VHS_AUDIO to Audio🎥🅥🅗🅢",
+    "VHS_PruneOutputs": "Prune Outputs 🎥🅥🅗🅢",
+    "VHS_BatchManager": "Meta Batch Manager 🎥🅥🅗🅢",
+    "VHS_VideoInfo": "Video Info 🎥🅥🅗🅢",
+    "VHS_VideoInfoSource": "Video Info (Source) 🎥🅥🅗🅢",
+    "VHS_VideoInfoLoaded": "Video Info (Loaded) 🎥🅥🅗🅢",
+    "VHS_SelectFilename": "Select Filename 🎥🅥🅗🅢",
     # Batched Nodes
-    "VHS_VAEEncodeBatched_A100": "VAE Encode Batched A100 🎥🅥🅗🅢",
-    "VHS_VAEDecodeBatched_A100": "VAE Decode Batched A100 🎥🅥🅗🅢",
+    "VHS_VAEEncodeBatched": "VAE Encode Batched 🎥🅥🅗🅢",
+    "VHS_VAEDecodeBatched": "VAE Decode Batched 🎥🅥🅗🅢",
     # Latent and Image nodes
-    "VHS_SplitLatents_A100": "Split Latents A100 🎥🅥🅗🅢",
-    "VHS_SplitImages_A100": "Split Images A100 🎥🅥🅗🅢",
-    "VHS_SplitMasks_A100": "Split Masks A100 🎥🅥🅗🅢",
-    "VHS_MergeLatents_A100": "Merge Latents A100 🎥🅥🅗🅢",
-    "VHS_MergeImages_A100": "Merge Images A100 🎥🅥🅗🅢",
-    "VHS_MergeMasks_A100": "Merge Masks A100 🎥🅥🅗🅢",
-    "VHS_GetLatentCount_A100": "Get Latent Count A100 🎥🅥🅗🅢",
-    "VHS_GetImageCount_A100": "Get Image Count A100 🎥🅥🅗🅢",
-    "VHS_GetMaskCount_A100": "Get Mask Count A100 🎥🅥🅗🅢",
-    "VHS_DuplicateLatents_A100": "Repeat Latents A100 🎥🅥🅗🅢",
-    "VHS_DuplicateImages_A100": "Repeat Images A100 🎥🅥🅗🅢",
-    "VHS_DuplicateMasks_A100": "Repeat Masks A100 🎥🅥🅗🅢",
-    "VHS_SelectEveryNthLatent_A100": "Select Every Nth Latent A100 🎥🅥🅗🅢",
-    "VHS_SelectEveryNthImage_A100": "Select Every Nth Image A100 🎥🅥🅗🅢",
-    "VHS_SelectEveryNthMask_A100": "Select Every Nth Mask A100 🎥🅥🅗🅢",
-    "VHS_SelectLatents_A100": "Select Latents A100 🎥🅥🅗🅢",
-    "VHS_SelectImages_A100": "Select Images A100 🎥🅥🅗🅢",
-    "VHS_SelectMasks_A100": "Select Masks A100 🎥🅥🅗🅢",
-    "VHS_Unbatch_A100": "Unbatch A100 🎥🅥🅗🅢",
-    "VHS_SelectLatest_A100": "Select Latest A100 🎥🅥🅗🅢",
+    "VHS_SplitLatents": "Split Latents 🎥🅥🅗🅢",
+    "VHS_SplitImages": "Split Images 🎥🅥🅗🅢",
+    "VHS_SplitMasks": "Split Masks 🎥🅥🅗🅢",
+    "VHS_MergeLatents": "Merge Latents 🎥🅥🅗🅢",
+    "VHS_MergeImages": "Merge Images 🎥🅥🅗🅢",
+    "VHS_MergeMasks": "Merge Masks 🎥🅥🅗🅢",
+    "VHS_GetLatentCount": "Get Latent Count 🎥🅥🅗🅢",
+    "VHS_GetImageCount": "Get Image Count 🎥🅥🅗🅢",
+    "VHS_GetMaskCount": "Get Mask Count 🎥🅥🅗🅢",
+    "VHS_DuplicateLatents": "Repeat Latents 🎥🅥🅗🅢",
+    "VHS_DuplicateImages": "Repeat Images 🎥🅥🅗🅢",
+    "VHS_DuplicateMasks": "Repeat Masks 🎥🅥🅗🅢",
+    "VHS_SelectEveryNthLatent": "Select Every Nth Latent 🎥🅥🅗🅢",
+    "VHS_SelectEveryNthImage": "Select Every Nth Image 🎥🅥🅗🅢",
+    "VHS_SelectEveryNthMask": "Select Every Nth Mask 🎥🅥🅗🅢",
+    "VHS_SelectLatents": "Select Latents 🎥🅥🅗🅢",
+    "VHS_SelectImages": "Select Images 🎥🅥🅗🅢",
+    "VHS_SelectMasks": "Select Masks 🎥🅥🅗🅢",
+    "VHS_Unbatch":  "Unbatch 🎥🅥🅗🅢",
+    "VHS_SelectLatest": "Select Latest 🎥🅥🅗🅢",
 }
-
