@@ -646,10 +646,10 @@ class VideoCombine:
             
             # ============================================================
             # AGGRESSIVE TENSOR CLEANUP using garbage collector scan
-            # Scan all objects in memory and clear large tensors directly
+            # ONLY clear 4D video/image tensors, NOT model weights
             # ============================================================
             
-            # Step 0: Clear all large tensors via gc scan (most reliable method)
+            # Step 0: Clear only 4D video/image tensors via gc scan
             try:
                 tensor_cleared = 0
                 tensor_bytes_freed = 0
@@ -660,11 +660,27 @@ class VideoCombine:
                 for obj in all_objects:
                     try:
                         if isinstance(obj, torch.Tensor):
+                            # Skip model parameters (they have requires_grad or are part of nn.Module)
+                            if obj.requires_grad:
+                                continue
+                            
+                            # Skip tensors that are not 4D (video/image format)
+                            # Model weights are typically 1D (bias), 2D (linear), or 4D convolution kernels
+                            # Video/image tensors are 4D: (B, H, W, C) or (B, C, H, W)
+                            if len(obj.shape) != 4:
+                                continue
+                            
+                            # Check if it looks like video/image data (not conv kernel)
+                            # Video tensors typically have large spatial dimensions
+                            # Conv kernels have small spatial dimensions (3x3, 5x5, etc.)
+                            if obj.shape[2] < 32 or obj.shape[3] < 32:
+                                continue  # Skip small kernels
+                            
                             # Calculate tensor size in bytes
                             tensor_size = obj.numel() * obj.element_size()
                             
-                            # Clear tensors larger than 1MB (likely video/image data)
-                            if tensor_size > 1024 * 1024:  # 1MB threshold
+                            # Clear tensors larger than 10MB (definitely video/image data)
+                            if tensor_size > 10 * 1024 * 1024:  # 10MB threshold
                                 tensor_bytes_freed += tensor_size
                                 # Replace tensor data with empty tensor
                                 obj.data = torch.empty(0, device=obj.device, dtype=obj.dtype)
@@ -674,9 +690,9 @@ class VideoCombine:
                 
                 if tensor_cleared > 0:
                     freed_gb = tensor_bytes_freed / 1024 / 1024 / 1024
-                    print(f"[Video Combine A100] ✅ Cleared {tensor_cleared} large tensors ({freed_gb:.2f} GB)")
+                    print(f"[Video Combine A100] ✅ Cleared {tensor_cleared} video tensors ({freed_gb:.2f} GB)")
                 else:
-                    print("[Video Combine A100] ⚠️ No large tensors found to clear")
+                    print("[Video Combine A100] ⚠️ No video tensors found to clear")
                     
             except Exception as e:
                 print(f"[Video Combine A100] ⚠️ Tensor scan error: {e}")
