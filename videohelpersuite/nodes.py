@@ -639,6 +639,7 @@ class VideoCombine:
         # Clear RAM if requested
         if clear_ram:
             import psutil
+            import gc
             process = psutil.Process()
             ram_before = process.memory_info().rss / 1024 / 1024 / 1024
             print(f"[Video Combine A100] ⚠️ AGGRESSIVE RAM CLEANUP - RAM before: {ram_before:.2f} GB")
