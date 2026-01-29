@@ -645,57 +645,11 @@ class VideoCombine:
             print(f"[Video Combine A100] ⚠️ AGGRESSIVE RAM CLEANUP - RAM before: {ram_before:.2f} GB")
             
             # ============================================================
-            # AGGRESSIVE TENSOR CLEANUP using garbage collector scan
-            # ONLY clear 4D video/image tensors, NOT model weights
+            # NOTE: Direct tensor clearing via gc.get_objects() is NOT safe
+            # because it can clear cached tensors from other nodes
+            # (e.g., GIMM-VFI's backwarp_tenGrid, model attention caches, etc.)
+            # We rely on ComfyUI's built-in memory management instead.
             # ============================================================
-            
-            # Step 0: Clear only 4D video/image tensors via gc scan
-            try:
-                tensor_cleared = 0
-                tensor_bytes_freed = 0
-                
-                # Get all objects in memory
-                all_objects = gc.get_objects()
-                
-                for obj in all_objects:
-                    try:
-                        if isinstance(obj, torch.Tensor):
-                            # Skip model parameters (they have requires_grad or are part of nn.Module)
-                            if obj.requires_grad:
-                                continue
-                            
-                            # Skip tensors that are not 4D (video/image format)
-                            # Model weights are typically 1D (bias), 2D (linear), or 4D convolution kernels
-                            # Video/image tensors are 4D: (B, H, W, C) or (B, C, H, W)
-                            if len(obj.shape) != 4:
-                                continue
-                            
-                            # Check if it looks like video/image data (not conv kernel)
-                            # Video tensors typically have large spatial dimensions
-                            # Conv kernels have small spatial dimensions (3x3, 5x5, etc.)
-                            if obj.shape[2] < 32 or obj.shape[3] < 32:
-                                continue  # Skip small kernels
-                            
-                            # Calculate tensor size in bytes
-                            tensor_size = obj.numel() * obj.element_size()
-                            
-                            # Clear tensors larger than 10MB (definitely video/image data)
-                            if tensor_size > 10 * 1024 * 1024:  # 10MB threshold
-                                tensor_bytes_freed += tensor_size
-                                # Replace tensor data with empty tensor
-                                obj.data = torch.empty(0, device=obj.device, dtype=obj.dtype)
-                                tensor_cleared += 1
-                    except Exception:
-                        pass
-                
-                if tensor_cleared > 0:
-                    freed_gb = tensor_bytes_freed / 1024 / 1024 / 1024
-                    print(f"[Video Combine A100] ✅ Cleared {tensor_cleared} video tensors ({freed_gb:.2f} GB)")
-                else:
-                    print("[Video Combine A100] ⚠️ No video tensors found to clear")
-                    
-            except Exception as e:
-                print(f"[Video Combine A100] ⚠️ Tensor scan error: {e}")
             
             # Step 1: Unload all models from VRAM/RAM
             try:
