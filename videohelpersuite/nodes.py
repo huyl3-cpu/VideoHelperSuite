@@ -260,7 +260,7 @@ class VideoCombine:
                 "pingpong": ("BOOLEAN", {"default": False}),
                 "save_output": ("BOOLEAN", {"default": True}),
                 "enable_preview": ("BOOLEAN", {"default": True}),
-                "clear_ram": ("BOOLEAN", {"default": False}),
+                "clear_ram": ("BOOLEAN", {"default": True}),
             },
             "optional": {
                 "audio": ("AUDIO",),
