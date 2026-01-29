@@ -1,3 +1,4 @@
+import gc
 import os
 import sys
 import json
@@ -258,6 +259,7 @@ class VideoCombine:
                 "format": (["image/gif", "image/webp"] + ffmpeg_formats, {'formats': format_widgets}),
                 "pingpong": ("BOOLEAN", {"default": False}),
                 "save_output": ("BOOLEAN", {"default": True}),
+                "clear_ram": ("BOOLEAN", {"default": False}),
             },
             "optional": {
                 "audio": ("AUDIO",),
@@ -294,6 +296,7 @@ class VideoCombine:
         manual_format_widgets=None,
         meta_batch=None,
         vae=None,
+        clear_ram=False,
         **kwargs
     ):
         if latents is not None:
@@ -630,6 +633,14 @@ class VideoCombine:
         if num_frames == 1 and 'png' in format and '%03d' in file:
             preview['format'] = 'image/png'
             preview['filename'] = file.replace('%03d', '001')
+        
+        # Clear RAM if requested
+        if clear_ram:
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+        
         return {"ui": {"gifs": [preview]}, "result": ((save_output, output_files),)}
 
 class LoadAudio:
