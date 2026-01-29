@@ -324,6 +324,8 @@ def load_video(meta_batch=None, unique_id=None, memory_limit_mb=None, vae=None,
     else:
         downscale_ratio = format.get('dim', (1,))[0]
     if meta_batch is None or unique_id not in meta_batch.inputs:
+        # Remove enable_preview from kwargs as it's a UI-only parameter
+        kwargs.pop('enable_preview', None)
         gen = generator(meta_batch=meta_batch, unique_id=unique_id, downscale_ratio=downscale_ratio, **kwargs)
         (width, height, fps, duration, total_frames, target_frame_time, yieldable_frames, new_width, new_height, alpha) = next(gen)
 
