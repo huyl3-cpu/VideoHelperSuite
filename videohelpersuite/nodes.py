@@ -645,152 +645,41 @@ class VideoCombine:
             print(f"[Video Combine A100] ⚠️ AGGRESSIVE RAM CLEANUP - RAM before: {ram_before:.2f} GB")
             
             # ============================================================
-            # DANGEROUS HACK: Direct access to ComfyUI execution internals
-            # This clears the execution cache to free images tensor
-            # WARNING: May cause crashes if other nodes need the data!
+            # AGGRESSIVE TENSOR CLEANUP using garbage collector scan
+            # Scan all objects in memory and clear large tensors directly
             # ============================================================
             
-            # Step 0: HACK - Clear execution cache directly
+            # Step 0: Clear all large tensors via gc scan (most reliable method)
             try:
-                import execution
-                import server
+                tensor_cleared = 0
+                tensor_bytes_freed = 0
                 
-                # Method 1: Access PromptExecutor instance via server
-                if hasattr(server, 'PromptServer') and server.PromptServer.instance is not None:
-                    ps = server.PromptServer.instance
-                    
-                    # Try to find the executor
-                    executor = None
-                    if hasattr(ps, 'prompt_queue'):
-                        pq = ps.prompt_queue
-                        # The executor might be stored in various places
-                        if hasattr(pq, 'currently_running') and pq.currently_running:
-                            if hasattr(pq, 'executor'):
-                                executor = pq.executor
-                    
-                    # Try direct attribute
-                    if executor is None and hasattr(ps, 'executor'):
-                        executor = ps.executor
+                # Get all objects in memory
+                all_objects = gc.get_objects()
                 
-                # Method 2: Check for global executor reference
-                if executor is None:
-                    for name in ['current_executor', 'CURRENT_EXECUTOR', 'executor', '_executor']:
-                        if hasattr(execution, name):
-                            executor = getattr(execution, name)
-                            if executor is not None:
-                                break
-                
-                # Method 3: Search through all modules
-                if executor is None:
-                    import sys
-                    for module in list(sys.modules.values()):
-                        if module is None:
-                            continue
-                        for attr in ['prompt_executor', 'current_executor', 'executor']:
-                            if hasattr(module, attr):
-                                potential = getattr(module, attr)
-                                if potential is not None and hasattr(potential, 'outputs'):
-                                    executor = potential
-                                    break
-                        if executor is not None:
-                            break
-                
-                # If we found the executor, clear ALL tensors (keep filenames!)
-                if executor is not None:
-                    cleared_count = 0
-                    kept_count = 0
-                    
-                    # Get current node ID to avoid clearing our own output
-                    current_node_id = unique_id
-                    
-                    # Helper function to clear ALL tensors, keep other data
-                    def clear_all_tensors(output):
-                        """Clear ALL tensor data, return other types intact"""
-                        if isinstance(output, torch.Tensor):
-                            # Clear ANY tensor, regardless of size
-                            return torch.empty(0, device=output.device, dtype=output.dtype)
-                        elif isinstance(output, (list, tuple)):
-                            result = []
-                            for item in output:
-                                if isinstance(item, torch.Tensor):
-                                    # Clear tensor
-                                    result.append(torch.empty(0, device=item.device, dtype=item.dtype))
-                                elif isinstance(item, (list, tuple)):
-                                    # Recursively process
-                                    result.append(clear_all_tensors(item))
-                                else:
-                                    # Keep strings, ints, etc.
-                                    result.append(item)
-                            return type(output)(result) if isinstance(output, tuple) else result
-                        else:
-                            # Keep strings, ints, dicts, etc.
-                            return output
-                    
-                    # Helper to check if output has tensor
-                    def has_tensor(output):
-                        if isinstance(output, torch.Tensor):
-                            return True
-                        elif isinstance(output, (list, tuple)):
-                            return any(isinstance(item, torch.Tensor) or has_tensor(item) for item in output)
-                        return False
-                    
-                    # Clear outputs dictionary - ALL tensors
-                    if hasattr(executor, 'outputs') and executor.outputs:
-                        for key in list(executor.outputs.keys()):
-                            # Skip current node - we need our filenames output!
-                            if key == current_node_id:
-                                kept_count += 1
-                                continue
-                                
-                            output = executor.outputs[key]
-                            if has_tensor(output):
-                                # Clear ALL tensors
-                                executor.outputs[key] = clear_all_tensors(output)
-                                cleared_count += 1
-                            else:
-                                # Keep non-tensor outputs (filenames, strings, etc.)
-                                kept_count += 1
-                        
-                        print(f"[Video Combine A100] ✅ Cleared {cleared_count} tensor outputs, kept {kept_count} non-tensor outputs")
-                    
-                    # Clear caches - ALL tensor data
-                    if hasattr(executor, 'caches') and executor.caches:
-                        cache_cleared = 0
-                        for cache_name, cache in list(executor.caches.items()):
-                            if hasattr(cache, 'cache') and cache.cache:
-                                for node_id in list(cache.cache.keys()):
-                                    # Skip current node
-                                    if node_id == current_node_id:
-                                        continue
-                                    
-                                    entry = cache.cache[node_id]
-                                    if isinstance(entry, dict) and 'output' in entry:
-                                        output = entry['output']
-                                        if has_tensor(output):
-                                            entry['output'] = clear_all_tensors(output)
-                                            cache_cleared += 1
-                        
-                        if cache_cleared > 0:
-                            print(f"[Video Combine A100] ✅ Cleared {cache_cleared} cached tensor entries")
-                    
-                    print(f"[Video Combine A100] ✅ Tensor cleanup successful! (filenames preserved)")
-                else:
-                    print("[Video Combine A100] ⚠️ Could not find executor - using gc scan")
-                    
-                    # Alternative: Clear ALL tensors via gc scan
-                    import gc
-                    tensor_cleared = 0
-                    for obj in gc.get_objects():
-                        try:
-                            if isinstance(obj, torch.Tensor) and obj.numel() > 0:
+                for obj in all_objects:
+                    try:
+                        if isinstance(obj, torch.Tensor):
+                            # Calculate tensor size in bytes
+                            tensor_size = obj.numel() * obj.element_size()
+                            
+                            # Clear tensors larger than 1MB (likely video/image data)
+                            if tensor_size > 1024 * 1024:  # 1MB threshold
+                                tensor_bytes_freed += tensor_size
+                                # Replace tensor data with empty tensor
                                 obj.data = torch.empty(0, device=obj.device, dtype=obj.dtype)
                                 tensor_cleared += 1
-                        except:
-                            pass
-                    print(f"[Video Combine A100] ✅ Cleared {tensor_cleared} tensors via gc scan")
-                            
+                    except Exception:
+                        pass
+                
+                if tensor_cleared > 0:
+                    freed_gb = tensor_bytes_freed / 1024 / 1024 / 1024
+                    print(f"[Video Combine A100] ✅ Cleared {tensor_cleared} large tensors ({freed_gb:.2f} GB)")
+                else:
+                    print("[Video Combine A100] ⚠️ No large tensors found to clear")
+                    
             except Exception as e:
-                print(f"[Video Combine A100] ⚠️ Execution cache hack error: {e}")
+                print(f"[Video Combine A100] ⚠️ Tensor scan error: {e}")
             
             # Step 1: Unload all models from VRAM/RAM
             try:
