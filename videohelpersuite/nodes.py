@@ -645,43 +645,11 @@ class VideoCombine:
             print(f"[Video Combine A100] ⚠️ AGGRESSIVE RAM CLEANUP - RAM before: {ram_before:.2f} GB")
             
             # ============================================================
-            # Clear ONLY CPU tensors (video frames are on CPU after processing)
-            # CUDA tensors are protected (model weights, GIMM-VFI cache, etc.)
+            # NOTE: Direct tensor clearing via gc.get_objects() is NOT possible
+            # because we cannot distinguish video data from model weights.
+            # Both can be on CPU with requires_grad=False in eval mode.
+            # We rely on ComfyUI's memory management + garbage collection.
             # ============================================================
-            
-            try:
-                tensor_cleared = 0
-                tensor_bytes_freed = 0
-                
-                for obj in gc.get_objects():
-                    try:
-                        if isinstance(obj, torch.Tensor):
-                            # ONLY clear CPU tensors - protect all CUDA tensors
-                            if obj.device.type != 'cpu':
-                                continue
-                            
-                            # Skip small tensors
-                            tensor_size = obj.numel() * obj.element_size()
-                            if tensor_size < 10 * 1024 * 1024:  # < 10MB
-                                continue
-                            
-                            # Skip tensors with requires_grad (model params)
-                            if obj.requires_grad:
-                                continue
-                            
-                            # Clear this CPU tensor
-                            tensor_bytes_freed += tensor_size
-                            obj.data = torch.empty(0, dtype=obj.dtype)
-                            tensor_cleared += 1
-                    except Exception:
-                        pass
-                
-                if tensor_cleared > 0:
-                    freed_gb = tensor_bytes_freed / 1024 / 1024 / 1024
-                    print(f"[Video Combine A100] ✅ Cleared {tensor_cleared} CPU tensors ({freed_gb:.2f} GB)")
-                    
-            except Exception as e:
-                print(f"[Video Combine A100] ⚠️ CPU tensor scan error: {e}")
             
             # Step 1: Unload all models from VRAM/RAM
             try:
