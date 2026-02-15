@@ -259,6 +259,8 @@ class VideoCombine:
                 "format": (["image/gif", "image/webp"] + ffmpeg_formats, {'formats': format_widgets}),
                 "pingpong": ("BOOLEAN", {"default": False}),
                 "save_output": ("BOOLEAN", {"default": True}),
+                "enable_preview": ("BOOLEAN", {"default": True, "tooltip": "Enable video preview in the node UI"}),
+                "clear_ram": ("BOOLEAN", {"default": True, "tooltip": "Clear RAM/VRAM after combining video to free memory"}),
             },
             "optional": {
                 "audio": ("AUDIO",),
