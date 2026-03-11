@@ -639,100 +639,14 @@ class VideoCombine:
         
         # Clear RAM if requested
         if clear_ram:
-            import psutil
-            import gc
-            process = psutil.Process()
-            ram_before = process.memory_info().rss / 1024 / 1024 / 1024
-            
-            # ============================================================
-            # Step 0: Clear the images tensor directly (safe - we know it's video data)
-            # This clears RAM used by frames from SeedVR2, GIMM-VFI, etc.
-            # ============================================================
+            # Only clear the images tensor (Step 0)
+            # This frees RAM used by frames from SeedVR2, GIMM-VFI, etc.
             try:
-                # Clear original images tensor if it exists (saved before converting to iterator)
                 if original_images_tensor is not None:
                     if hasattr(original_images_tensor, 'data') and hasattr(original_images_tensor, 'numel'):
-                        images_size = original_images_tensor.numel() * original_images_tensor.element_size()
-                        images_size_gb = images_size / 1024 / 1024 / 1024
                         original_images_tensor.data = torch.empty(0, dtype=original_images_tensor.dtype, device=original_images_tensor.device)
-            except Exception as e:
+            except Exception:
                 pass
-            
-            # Step 1: Unload models and clear VRAM (without offloading to RAM)
-            try:
-                import comfy.model_management as mm
-                
-                # Get VRAM before cleanup
-                vram_before = 0
-                if torch.cuda.is_available():
-                    vram_before = torch.cuda.memory_allocated() / 1024 / 1024 / 1024
-                
-                # Unload all models (ComfyUI will handle the cleanup)
-                mm.unload_all_models()
-                
-                # Request maximum memory free
-                device = mm.get_torch_device()
-                try:
-                    mm.free_memory(999 * 1024 * 1024 * 1024, device)
-                except:
-                    pass
-                
-                # Soft cache cleanup
-                mm.soft_empty_cache()
-                
-                # Get VRAM after cleanup
-                if torch.cuda.is_available():
-                    torch.cuda.synchronize()
-                    torch.cuda.empty_cache()
-                    
-            except Exception as e:
-                pass
-            
-            # Step 2: Clear server caches
-            try:
-                import server
-                if hasattr(server, 'PromptServer') and server.PromptServer.instance is not None:
-                    ps = server.PromptServer.instance
-                    ps.prompt_queue.set_flag("free_memory", True)
-                    for attr in ['last_node_id', 'last_prompt_id', 'last_execution_result']:
-                        if hasattr(ps, attr):
-                            setattr(ps, attr, None)
-            except:
-                pass
-            
-            # Step 3: Aggressive garbage collection
-            gc.collect(0)
-            gc.collect(1)
-            gc.collect(2)
-            for _ in range(5):
-                gc.collect()
-            
-            # Step 4: Clear CUDA memory completely
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                torch.cuda.synchronize()
-                try:
-                    torch.cuda.ipc_collect()
-                except:
-                    pass
-                try:
-                    torch.cuda.reset_peak_memory_stats()
-                    torch.cuda.reset_accumulated_memory_stats()
-                except:
-                    pass
-                torch.cuda.synchronize()
-                torch.cuda.empty_cache()
-            
-            # Step 5: Force memory release to OS (Linux/Colab)
-            try:
-                import ctypes
-                libc = ctypes.CDLL("libc.so.6")
-                libc.malloc_trim(0)
-            except:
-                pass
-                
-            for _ in range(3):
-                gc.collect()
         
         # Return with or without preview based on enable_preview setting
         if enable_preview:
