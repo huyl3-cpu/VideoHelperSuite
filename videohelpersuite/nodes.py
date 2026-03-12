@@ -315,7 +315,7 @@ class VideoCombine:
             return ((save_output, []),)
         num_frames = len(images)
         pbar = ProgressBar(num_frames)
-        original_images_tensor = images if isinstance(images, torch.Tensor) else None  # Save for RAM cleanup
+        images_tensor_ref = images if isinstance(images, torch.Tensor) else None  # ref for clear_ram (image frames only)
         if vae is not None:
             downscale_ratio = getattr(vae, "downscale_ratio", 8)
             width = images.size(-1)*downscale_ratio
@@ -637,16 +637,10 @@ class VideoCombine:
             preview['format'] = 'image/png'
             preview['filename'] = file.replace('%03d', '001')
         
-        # Clear RAM if requested
-        if clear_ram:
-            # Only clear the images tensor (Step 0)
-            # This frees RAM used by frames from SeedVR2, GIMM-VFI, etc.
-            try:
-                if original_images_tensor is not None:
-                    if hasattr(original_images_tensor, 'data') and hasattr(original_images_tensor, 'numel'):
-                        original_images_tensor.data = torch.empty(0, dtype=original_images_tensor.dtype, device=original_images_tensor.device)
-            except Exception:
-                pass
+        # Clear RAM: only delete image frames tensor, preserve job history & model weights
+        if clear_ram and images_tensor_ref is not None:
+            del images_tensor_ref
+            gc.collect()
         
         # Return with or without preview based on enable_preview setting
         if enable_preview:
