@@ -641,6 +641,8 @@ class VideoCombine:
         if clear_ram and images_tensor_ref is not None:
             del images_tensor_ref
             gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
         
         # Return with or without preview based on enable_preview setting
         if enable_preview:
