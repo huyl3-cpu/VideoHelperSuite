@@ -640,9 +640,27 @@ class VideoCombine:
         # Clear RAM: only delete image frames tensor, preserve job history & model weights
         if clear_ram and images_tensor_ref is not None:
             del images_tensor_ref
-            gc.collect()
+            # Multi-pass GC (phá circular references)
+            for _ in range(3):
+                gc.collect()
             if torch.cuda.is_available():
+                torch.cuda.synchronize()          # đảm bảo GPU hoàn thành trước khi clear
                 torch.cuda.empty_cache()
+                try:
+                    torch.cuda.ipc_collect()      # giải phóng IPC memory
+                except Exception:
+                    pass
+                try:
+                    torch.cuda.reset_peak_memory_stats()
+                except Exception:
+                    pass
+            # Trả pages về OS kernel (Linux/Colab)
+            try:
+                import ctypes, platform
+                if platform.system() == "Linux":
+                    ctypes.CDLL("libc.so.6").malloc_trim(0)
+            except Exception:
+                pass
         
         # Return with or without preview based on enable_preview setting
         if enable_preview:
