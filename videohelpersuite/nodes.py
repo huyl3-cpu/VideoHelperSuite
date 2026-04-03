@@ -42,6 +42,77 @@ def flatten_list(l):
             ret.append(e)
     return ret
 
+# ── Qwen-VL clear_ram pattern: ComfyUI output subcache clearing ──────────────
+_VHS_EXECUTOR_REF = None
+
+def _vhs_find_executor():
+    """Tìm PromptExecutor instance (cached weakref → server attr → gc scan)."""
+    global _VHS_EXECUTOR_REF
+    if _VHS_EXECUTOR_REF is not None and _VHS_EXECUTOR_REF() is not None:
+        return _VHS_EXECUTOR_REF()
+    try:
+        from server import PromptServer
+        e = getattr(PromptServer.instance, 'prompt_executor', None)
+        if e is not None and hasattr(e, 'caches'):
+            import weakref
+            _VHS_EXECUTOR_REF = weakref.ref(e)
+            return e
+    except Exception:
+        pass
+    try:
+        import gc as _gc
+        for obj in _gc.get_objects():
+            if type(obj).__name__ == 'PromptExecutor' and hasattr(obj, 'caches'):
+                import weakref
+                _VHS_EXECUTOR_REF = weakref.ref(obj)
+                return obj
+    except Exception:
+        pass
+    return None
+
+def _vhs_clear_image_cache():
+    """Xóa CacheEntry chứa 4D float32 tensor (IMAGE frames từ VHS_LoadVideo)
+    khỏi ComfyUI output subcache tree.
+    ⚠️ KHÔNG gọi subcaches.clear() → gây AssertionError trong for-loop.
+    """
+    executor = _vhs_find_executor()
+    if executor is None:
+        return
+    try:
+        def _has_image_tensor(entry):
+            try:
+                outputs = getattr(entry, 'outputs', None)
+                if not outputs:
+                    return False
+                for slot in outputs:
+                    vals = slot if isinstance(slot, (list, tuple)) else [slot]
+                    for val in vals:
+                        if isinstance(val, torch.Tensor) and val.ndim == 4 and val.dtype == torch.float32:
+                            return True
+            except Exception:
+                pass
+            return False
+
+        def _scan_and_clear(c):
+            freed = 0
+            if hasattr(c, 'cache') and isinstance(c.cache, dict):
+                keys = [k for k, v in c.cache.items() if _has_image_tensor(v)]
+                for k in keys:
+                    del c.cache[k]
+                    freed += 1
+            if hasattr(c, 'subcaches') and isinstance(c.subcaches, dict):
+                for sc in c.subcaches.values():
+                    freed += _scan_and_clear(sc)
+                # ⚠️ KHÔNG gọi c.subcaches.clear()
+            return freed
+
+        n = _scan_and_clear(executor.caches.outputs)
+        if n > 0:
+            logger.debug(f"[VHS clear_ram] Freed {n} image tensor cache entries")
+    except Exception as e:
+        logger.debug(f"[VHS clear_ram] Subcache clear skipped: {e}")
+# ─────────────────────────────────────────────────────────────────────────────
+
 def iterate_format(video_format, for_widgets=True):
     """Provides an iterator over widgets, or arguments"""
     def indirector(cont, index):
@@ -637,14 +708,21 @@ class VideoCombine:
             preview['format'] = 'image/png'
             preview['filename'] = file.replace('%03d', '001')
         
-        # Clear RAM: only delete image frames tensor, preserve job history & model weights
+        # Clear RAM: Qwen-VL 5-step pattern
         if clear_ram and images_tensor_ref is not None:
+            # Bước 1: xóa frame tensor
             del images_tensor_ref
-            # Multi-pass GC (phá circular references)
+
+            # Bước 2: xóa ComfyUI output subcache (IMAGE tensors từ VHS_LoadVideo)
+            _vhs_clear_image_cache()
+
+            # Bước 3: Multi-pass GC (phá circular references)
             for _ in range(3):
                 gc.collect()
+
+            # Bước 4: CUDA cleanup
             if torch.cuda.is_available():
-                torch.cuda.synchronize()          # đảm bảo GPU hoàn thành trước khi clear
+                torch.cuda.synchronize()          # TRƯỚC empty_cache
                 torch.cuda.empty_cache()
                 try:
                     torch.cuda.ipc_collect()      # giải phóng IPC memory
@@ -652,9 +730,11 @@ class VideoCombine:
                     pass
                 try:
                     torch.cuda.reset_peak_memory_stats()
+                    torch.cuda.reset_accumulated_memory_stats()
                 except Exception:
                     pass
-            # Trả pages về OS kernel (Linux/Colab)
+
+            # Bước 5: Trả pages về OS kernel (Linux/Colab)
             try:
                 import ctypes, platform
                 if platform.system() == "Linux":
